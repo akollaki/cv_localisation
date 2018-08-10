@@ -1,0 +1,407 @@
+#
+# Authors: Avgi Kollakidou, Maria Eduarda Andrada
+# Release Date: 10.08.2018
+# Image - Based Position estimation in a modelled environment
+# European Masters in Advanced RObotics (EMARO+)
+#
+# Functionality: teleoperation of the turtlebot robot and online localisation,
+# dataset acquisition, descriptors computation. All done through terminal by
+# user. Instructions includedself.
+#
+# Library Dependencies: openCV
+#                       rospy
+#                       pickle
+#
+# Script Dependencies:  take_photo.py
+#                       acquire_dataset_descriptors.py
+#                       find_match.py
+#
+#
+# The script and ROS package are based on the teleop node from
+# Willow Garage, Inc. All computer vision functinalities were newlly developped
+
+
+
+# Copyright (c) 2011, Willow Garage, Inc.
+# All rights reserved.
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions are met:
+#
+#    * Redistributions of source code must retain the above copyright
+#      notice, this list of conditions and the following disclaimer.
+#    * Redistributions in binary form must reproduce the above copyright
+#      notice, this list of conditions and the following disclaimer in the
+#      documentation and/or other materials provided with the distribution.
+#    * Neither the name of the Willow Garage, Inc. nor the names of its
+#      contributors may be used to endorse or promote products derived from
+#       this software without specific prior written permission.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+# ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
+# LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+# CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+# SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+# INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+# CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+# ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+# POSSIBILITY OF SUCH DAMAGE.
+
+
+import rospy
+import operator
+from geometry_msgs.msg import Twist
+import cv2 as cv
+import pickle, time
+from find_match import FindMatch
+import sys, select, termios, tty, os
+from take_photo import TakePhoto
+import rospkg
+import pyttsx
+from acquire_dataset_descriptors import Descriptors
+
+
+# control instructions. Viewed on beggining and on the press of 'm'
+
+msg = """
+Control Your Turtlebot!
+---------------------------
+Moving around:
+        w
+   a    s    d
+
+! Press 'l' to localise !
+! Press 'i' to change dataset for localisation !
+! Press 'j' to acquire dataset ; 'esc' to stop !
+! Press 'k' to get descriptors of dataset !
+! Press 'm' to reprint instructions !
+
+
+q/z : increase/decrease max speeds by 10%
+y/x : increase/decrease only linear speed by 10%
+e/c : increase/decrease only angular speed by 10%
+space key, k : force stop
+anything else : stop smoothly
+
+CTRL-C to quit
+"""
+
+moveBindings = {
+        'w':(1,0),
+        # 'o':(1,-1),
+        'a':(0,1),
+        'd':(0,-1),
+        # 'u':(1,1),
+        's':(-1,0),
+        # '.':(-1,1),
+        # 'm':(-1,-1),
+           }
+
+speedBindings={
+        'q':(1.1,1.1),
+        'z':(.9,.9),
+        'y':(1.1,1),
+        'x':(.9,1),
+        'e':(1,1.1),
+        'c':(1,.9),
+          }
+
+# define variables for feature matching methods
+query_descriptors = []
+query_keypoints = []
+descriptors_dataset = []
+dataset_names = []
+minHessian = 400
+index = 0
+camera = TakePhoto()
+twist = Twist()
+find = FindMatch()
+desc = Descriptors()
+
+
+# read pack from RosPack
+rospack = rospkg.RosPack()
+path = rospack.get_path('teleLoc')
+
+full_path = path + '/scripts/'
+
+
+
+# feature detection and localisation function
+def localise(descriptors_dataset, dataset_names):
+    query_descriptors = []
+    good_matches = []
+    best_match = ''
+
+    # take picture
+    t0 = time.time()
+    img_title = full_path + 'query_robot/queryImg.jpg'
+    camera.take_picture(img_title)
+    queryImg = cv.imread(img_title, cv.IMREAD_GRAYSCALE)
+    if queryImg is None:
+        print('\nCould not open or find the query image!')
+        exit(0)
+
+    # find descriptors
+    find.getQueryDescriptor(query_descriptors, queryImg)
+
+    # go through database, find good matches
+    find.match(good_matches, descriptors_dataset, query_descriptors)
+    index, value = max(enumerate(good_matches), key=operator.itemgetter(1))
+
+    #  initialise and configure python text to speech engine
+    engine = pyttsx.init()
+    # set rate, default = 200 (too fast)
+    rate = engine.getProperty('rate')
+    engine.setProperty('rate', rate-85)
+    # get voices - set to english
+    voices = engine.getProperty('voices')
+    engine.setProperty('voice', voices[12].id)
+
+    # threshold for number of good matches, prevent false localisattion
+    if (value > 30):
+        if index <= len(dataset_names):
+            best_match = dataset_names[index]
+            t1 = time.time()
+
+            # display results
+            print('\nI am in ' + best_match)
+            time_taken = t1-t0
+            print('Locallisation time: ' + str(time_taken) + 's')
+
+            engine.say('i am in ' + best_match)
+            engine.runAndWait()
+    else:
+        engine.setProperty('rate', rate-70)
+        print("\nCannot localise myself - try another angle")
+        engine.say('Can\'t localise myself')
+        engine.runAndWait()
+
+
+
+
+# function for robot rotation and dataset acquisition
+def acquireDataset():
+    # get dataset params from user. Dataset name and location
+    dataset_nr = raw_input('\n Acquire Dataset: Enter dataset name e.g. (dataset2): \n ')
+    type(dataset_nr)
+    directory = full_path + dataset_nr
+    img_name = raw_input("enter location in world: \n " )
+    type(img_name)
+
+    print('\n ! Press \'esc\' to stop ! \n')
+
+    # if given path does not exist, it is created
+    if not os.path.exists(directory):
+        os.makedirs(directory)
+    # high frequency needed for checking if key is pressed
+    freq = 10
+    rate = rospy.Rate(freq)
+    key2 = ''
+    i = 0
+    t = 0
+    # check if 'esc' is pressed - stop
+    while (key2 != '\x1b'):
+        key2 = getKey()
+
+        # rotate turtlebot until user presses 'esc'
+        twist.angular.z = -0.3
+        pub.publish(twist)
+
+        # acquire images at a lower frequency
+        if (t%freq == 0 ):
+
+            # acquire image for datatset
+            img_full_path = directory + '/' + img_name + '_{0}.jpg'.format(i+1)
+            while (os.path.exists(img_full_path)):
+                i += 1
+                # print(img_full_path)
+                img_full_path = directory + '/' + img_name + '_{0}.jpg'.format(i+1)
+            camera.take_picture(img_full_path)
+            print('\nAcquired image ' + str(i))
+            t = 0
+            i += 1
+        t += 1
+
+        rate.sleep()
+
+
+# compute descriptors from already acquired dataset
+def acquireDescriptors():
+    dataset_path = raw_input('\nenter the dataset name to acquire descriptors: \n')
+    type(dataset_path)
+    directory = full_path + dataset_path + '/'
+
+    # check if directory exists
+    while not os.path.exists(directory):
+        print('\nDirectory does not exist')
+        dataset_path = raw_input('please enter a correct dataset name: \n')
+        type(dataset_path)
+        directory = full_path + dataset_path + '/'
+        return
+    print('\nAcquiring Dataset Descriptors: Directory is: ' + dataset_path + '/')
+    # print(directory)
+
+    desc.getDescriptor(dataset_path, directory, minHessian, descriptors_dataset)
+    print('\nDescriptors acquired')
+
+# change of dataset used for localisation
+def changeDataset(initial_dataset):
+    new_loc_dataset = raw_input('\nWhich dataset should I localise with? \n')
+    type(new_loc_dataset)
+    initial_dataset = new_loc_dataset
+    return(initial_dataset)
+    # print('new_loc ' + new_loc_dataset)
+    # print('after change ' + initial_dataset)
+
+
+# returns key pressed on keyboard by user
+def getKey():
+    tty.setraw(sys.stdin.fileno())
+    rlist, _, _ = select.select([sys.stdin], [], [], 0.1)
+    if rlist:
+        key = sys.stdin.read(1)
+    else:
+        key = ''
+
+    termios.tcsetattr(sys.stdin, termios.TCSADRAIN, settings)
+    return key
+
+speed = .2
+turn = 1
+
+
+
+def vels(speed,turn):
+    return "currently:\tspeed %s\tturn %s " % (speed,turn)
+
+if __name__=="__main__":
+    settings = termios.tcgetattr(sys.stdin)
+
+    # initialise node
+    rospy.init_node('teleLoc_node')
+    pub = rospy.Publisher('~cmd_vel', Twist, queue_size=5)
+
+    initial_dataset = raw_input('\n\nSet default localisation dataset:\n')
+    type(initial_dataset)
+
+    initial_path = full_path + initial_dataset
+
+    while not os.path.exists(initial_path):
+        print('\nDirectory does not exist')
+        dataset_path = raw_input('please enter a correct dataset name: \n')
+        type(dataset_path)
+        initial_path = full_path + dataset_path
+
+    if os.path.exists(initial_path + '/descriptors.txt'):
+        with open(initial_path + '/descriptors.txt', 'rb') as fp:
+            descriptors_dataset = pickle.load(fp)
+    if os.path.exists(initial_path + '/names.txt'):
+        with open(initial_path +'/names.txt', 'rb') as fp:
+            dataset_names = pickle.load(fp)
+
+    # control variables
+    x = 0
+    th = 0
+    status = 0
+    count = 0
+    acc = 0.1
+    target_speed = 0
+    target_turn = 0
+    control_speed = 0
+    control_turn = 0
+    try:
+
+        print('\n' + msg)
+        print(vels(speed,turn))
+        # while node is not terminated
+        while(1):
+            key = getKey()
+
+            # key functionalities
+            if (key == 'l'):
+                # print(descriptors_dataset)
+                localise(descriptors_dataset, dataset_names)
+
+
+            elif (key == 'j'):
+                acquireDataset()
+
+            elif (key == 'k'):
+                acquireDescriptors()
+
+            elif (key == 'i'):
+                initial_dataset = changeDataset(initial_dataset)
+                print('\nChanged dataset to: ' + initial_dataset)
+                with open(full_path + initial_dataset + '/descriptors.txt', 'rb') as fp:
+                    descriptors_dataset = pickle.load(fp)
+                with open(full_path + initial_dataset +'/names.txt', 'rb') as fp:
+                    dataset_names = pickle.load(fp)
+
+            elif ( key == 'm'):
+                print(msg)
+
+            elif key in moveBindings.keys():
+                x = moveBindings[key][0]
+                th = moveBindings[key][1]
+                count = 0
+            elif key in speedBindings.keys():
+                speed = speed * speedBindings[key][0]
+                turn = turn * speedBindings[key][1]
+                count = 0
+
+                print(vels(speed,turn))
+                if (status == 14):
+                    print(msg)
+                status = (status + 1) % 15
+            elif key == ' ' or key == 'k' :
+                x = 0
+                th = 0
+                control_speed = 0
+                control_turn = 0
+            else:
+                count = count + 1
+                if count > 4:
+                    x = 0
+                    th = 0
+                if (key == '\x03'):
+                    break
+
+            target_speed = speed * x
+            target_turn = turn * th
+
+            if target_speed > control_speed:
+                control_speed = min( target_speed, control_speed + 0.02 )
+            elif target_speed < control_speed:
+                control_speed = max( target_speed, control_speed - 0.02 )
+            else:
+                control_speed = target_speed
+
+            if target_turn > control_turn:
+                control_turn = min( target_turn, control_turn + 0.1 )
+            elif target_turn < control_turn:
+                control_turn = max( target_turn, control_turn - 0.1 )
+            else:
+                control_turn = target_turn
+
+            twist = Twist()
+            twist.linear.x = control_speed; twist.linear.y = 0; twist.linear.z = 0
+            twist.angular.x = 0; twist.angular.y = 0; twist.angular.z = control_turn
+            pub.publish(twist)
+
+            #print("loop: {0}".format(count))
+            #print("target: vx: {0}, wz: {1}".format(target_speed, target_turn))
+            #print("publihsed: vx: {0}, wz: {1}".format(twist.linear.x, twist.angular.z))
+
+    except Exception as e:
+        print(e)
+
+    finally:
+        twist = Twist()
+        twist.linear.x = 0; twist.linear.y = 0; twist.linear.z = 0
+        twist.angular.x = 0; twist.angular.y = 0; twist.angular.z = 0
+        pub.publish(twist)
+
+    termios.tcsetattr(sys.stdin, termios.TCSADRAIN, settings)

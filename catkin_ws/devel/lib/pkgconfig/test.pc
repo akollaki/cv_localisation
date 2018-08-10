@@ -1,0 +1,8 @@
+prefix=/home/akollaki/Documents/groupProject/gazebo/catkin_ws/devel
+
+Name: test
+Description: Description of test
+Version: 0.0.0
+Cflags: 
+Libs: -L/home/akollaki/Documents/groupProject/gazebo/catkin_ws/devel/lib 
+Requires: 

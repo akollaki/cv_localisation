@@ -1,0 +1,9 @@
+<launch>
+  <!-- turtlebot_teleop_key already has its own built in velocity smoother -->
+  <node pkg="teleLoc" type="turtlebot_teleop_key" name="teleLoc_node"  output="screen">
+    <param name="scale_linear" value="0.5" type="double"/>
+    <param name="scale_angular" value="1.5" type="double"/>
+    <!-- <param name="path" value="$(find teleLoc)/scripts" type="string" /> -->
+    <remap from="teleLoc_node/cmd_vel" to="cmd_vel_mux/input/teleop"/>
+  </node>
+</launch>

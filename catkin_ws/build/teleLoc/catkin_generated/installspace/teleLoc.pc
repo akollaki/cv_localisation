@@ -1,0 +1,8 @@
+prefix=/home/akollaki/Documents/groupProject/gazebo/catkin_ws/install
+
+Name: teleLoc
+Description: Description of teleLoc
+Version: 2.4.2
+Cflags: 
+Libs: -L/home/akollaki/Documents/groupProject/gazebo/catkin_ws/install/lib 
+Requires: roscpp geometry_msgs joy

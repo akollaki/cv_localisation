@@ -1,0 +1,2 @@
+teleLoc:test
+-DCATKIN_DEVEL_PREFIX=/home/akollaki/Documents/groupProject/gazebo/catkin_ws/devel -DCMAKE_INSTALL_PREFIX=/home/akollaki/Documents/groupProject/gazebo/catkin_ws/install -G Unix Makefiles
